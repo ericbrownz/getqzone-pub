@@ -1,0 +1,14 @@
+.idea
+**/.DS_Store
+**/__pycache__/
+/myenv/
+/.venv/
+resource/temp
+resource/result
+resource/user
+resource/fetch-all
+test/request.txt
+test/resopnse.txt
+test/*.json
+
+resource/store
