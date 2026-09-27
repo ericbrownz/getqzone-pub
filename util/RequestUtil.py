@@ -4,7 +4,7 @@ from tqdm import tqdm
 import requests
 import json
 
-import util.SessionUtil as SessionUtil
+import util.DumpUtil as Dump
 import util.ResumeUtil as Resume
 
 # 登录态统一由 SessionUtil.get_session() 显式获取（不再 import 即登录），
@@ -58,6 +58,8 @@ def get_message(session, start, count, rate_limiter=None,
         return None
 
     reason = Resume.classify_error(response.status_code, response.text[:2000])
+    # 留档（默认关）：连 WAF/登录失效页也留——那正是最需要事后看清的响应。
+    Dump.save(f"pav_o{start}_c{count}_set{set_}_scope{scope}", response.content)
     if reason in Resume.FATAL_REASONS:
         raise Resume.FatalFetchError(f"PC 互动流 HTTP {response.status_code}: {reason}")
     return response

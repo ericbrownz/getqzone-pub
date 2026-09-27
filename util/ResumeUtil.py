@@ -1,12 +1,14 @@
 """C 线健壮性设施：断点续传（C1）+ 坏页跳过/定向重试（C2）+ 速率窗口（C3）。
 
-状态文件统一放 resource/temp/，按 uin 隔离：
-    <uin>_checkpoint.json   断点：{"pos": 已完成的最大批次下标}
-    <uin>_texts.jsonl       抓到的条目（JSON Lines，逐行追加，中断不丢）
-    <uin>_skips.jsonl       坏页记录：{"pos": offset/页码, "reason": 类型, "detail": str}
-    <uin>_ratelimit.json    速率窗口状态：{"window_start": ts, "count": N}
+状态文件统一放 resource/temp/，按 uin 隔离，且每条流有自己的前缀（pc_ / taotao_ /
+mobile_ / pcdeep_ / probe_ 等），互不覆盖：
+    <prefix><uin>_checkpoint.json   断点：{"pos": 已完成的最大批次下标}
+    <prefix><uin>_texts.jsonl       抓到的条目（JSON Lines，逐行追加，中断不丢）
+    <prefix><uin>_skips.jsonl       坏页记录：{"pos": offset/页码, "reason": 类型, "detail": str}
+    <prefix><uin>_ratelimit.json    速率窗口状态：{"window_start": ts, "count": N}
 
-流 A（PC 互动流）用 pos=offset；流 B（taotao 说说）用 pos=页码；mobile 源用
+流 A（PC 互动流）用 pos=**已完成的最大批次下标**（`offset = pos × 10`，count 固定 10）；
+流 B（taotao 说说）用 pos=页码；mobile 源用
 pos=已完成页数且 checkpoint 额外存游标 attachinfo（自包含可序列化，参照
 QzoneArchive advance_feed_cursor 的用法：存下页游标即可续传）。
 """

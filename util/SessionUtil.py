@@ -8,8 +8,6 @@
 """
 import re
 
-import requests
-
 import util.LoginUtil as Login
 
 
@@ -27,9 +25,9 @@ MOBILE_UA = (
 
 
 class QzoneSession:
-    def __init__(self, cookies=None):
+    def __init__(self, cookies=None, user_file=None, force_qr=False):
         if cookies is None:
-            cookies = Login.cookie()
+            cookies = Login.cookie(user_file=user_file, force_qr=force_qr)
         self.cookies = cookies
         self.uin = re.sub(r"o0*", "", cookies.get("uin"))
         self.g_tk = Login.bkn(cookies.get("p_skey"))
@@ -93,8 +91,8 @@ class QzoneSession:
 _session = None
 
 
-def get_session(force_new=False):
+def get_session(force_new=False, user_file=None, force_qr=False):
     global _session
     if _session is None or force_new:
-        _session = QzoneSession()
+        _session = QzoneSession(user_file=user_file, force_qr=force_qr)
     return _session

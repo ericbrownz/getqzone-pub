@@ -10,6 +10,7 @@ import util.SessionUtil as SessionUtil
 import util.StoreUtil as StoreUtilMod
 import util.AggregateUtil as Aggregate
 import util.DeepUtil as Deep
+import util.DumpUtil as Dump
 import util.ToolsUtil as Tools
 import util.ConfigUtil as Config
 import util.GetAllMomentsUtil as GetAllMoments
@@ -137,7 +138,11 @@ def parse_batch(message, pos):
 
         if clean_text:
             key = feed_keys[idx] if idx < len(feed_keys) else ""
-            batch.append([key, put_time, clean_text, img, [], "", action])
+            # raw 槽位放该 item 自己的 html 片段（不是整批，不重复 10 倍）。动作词(E3)与
+            # 互动人昵称都在里面——留档后改解析器可离线重算，不必为补列重抓全量。
+            # 库里存量行的 raw 为空（当年写死 ""），重抓时由 StoreUtil 回填。
+            raw_html = items[idx][1] if idx < len(items) else ""
+            batch.append([key, put_time, clean_text, img, [], raw_html, action])
     return batch, friends
 
 
@@ -206,10 +211,10 @@ def fetch_pc_interactions(args, store):
         return
 
     # 正常跑完：定向重试坏页（C2）
-    retry_skips(args, store)
+    retry_skips(store)
 
 
-def retry_skips(args, store):
+def retry_skips(store):
     """对 skips.jsonl 里记录的坏页单条重试；成功则补数据并移除记录。"""
     skips = resumable.load_skips()
     if not skips:
@@ -535,6 +540,9 @@ def parse_args():
                         help="互动流来源：pc=feeds2_html_pav_all, mobile=get_feeds, both=两个都抓")
     parser.add_argument("--fresh", action="store_true",
                         help="忽略断点从头抓（默认有断点就续传）")
+    parser.add_argument("--user", type=str, default="", metavar="NAME",
+                        help="登录态文件名（resource/user/ 下的名字）。指定后不再交互选择用户，"
+                             "无 TTY（后台/重定向）也能跑；不指定时维持原来的提问选择")
     parser.add_argument("--retry-skips", action="store_true",
                         help="只重试上次记录的坏页，不跑主循环")
     parser.add_argument("--rate", type=int, default=Resume.DEFAULT_WINDOW_PAGES,
@@ -553,23 +561,45 @@ def parse_args():
                              "深区比浅区更易触发 network busy，故独立且更严）")
     parser.add_argument("--deep-offsets", type=str, default="",
                         help="覆盖深区格表（逗号分隔 offset）；不填用内置 9 个历史命中格")
+    parser.add_argument("--deep-only", action="store_true",
+                        help="跳过浅区互动流抓取，直接跑深区（隐式开 --deep）。浅区已抓完、"
+                             "只想补深带时用——否则浅区会先跑一遍，可能吃掉整段登录态寿命")
+    parser.add_argument("--dump-raw", type=str, default="", metavar="DIR",
+                        help="把每个 pav_all 响应体原样留档到 DIR（默认关）。解析器改动后可离线重放，"
+                             "不必重抓；响应含真实昵称/QQ号，务必落在 .gitignore 的目录（如 resource/temp/dump）")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    if args.deep_only:
+        args.deep = True
     if args.deep and args.source == "mobile":
         print("--deep 仅作用于 pc 互动流（pav_all），--source mobile 下已忽略")
         args.deep = False
+    if args.dump_raw:
+        Dump.enable(args.dump_raw)
+        print(f"原始响应留档已开启：{args.dump_raw}")
 
     try:
-        session = SessionUtil.get_session()
+        session = SessionUtil.get_session(user_file=args.user)
+    except FileNotFoundError as e:
+        # --user 写错不该静默落到扫码分支：直接退出，列表里能看见正确名字
+        print(e)
+        exit(2)
+    try:
         user_info = Request.get_login_user_info(session)
-        user_nickname = user_info[session.uin][6]
-        print(f"用户<{session.uin}>,<{user_nickname}>登录成功")
     except Exception as e:
-        print(f"登录失败:请重新登录,错误信息:{str(e)}")
-        exit(0)
+        # 已存登录态失效就出二维码重登（无 TTY 也能走完），不再让用户先去跑别的脚本
+        print(f"已存登录态不可用（{type(e).__name__}: {e}），改走扫码登录")
+        try:
+            session = SessionUtil.get_session(user_file=args.user, force_new=True, force_qr=True)
+            user_info = Request.get_login_user_info(session)
+        except Exception as e2:
+            print(f"登录失败:请重新登录,错误信息:{str(e2)}")
+            exit(0)
+    user_nickname = user_info[session.uin][6]
+    print(f"用户<{session.uin}>,<{user_nickname}>登录成功")
 
     # 注册信号处理函数
     signal.signal(signal.SIGINT, signal_handler)
@@ -584,7 +614,7 @@ if __name__ == "__main__":
 
     if args.retry_skips:
         # 只补坏页：不跑任何抓取主循环，重试完直接按库中现有数据导出
-        retry_skips(args, store)
+        retry_skips(store)
         if store.count() > 0:
             save_data(store, open_result=not args.no_open)
         else:
@@ -593,7 +623,10 @@ if __name__ == "__main__":
 
     try:
         if args.source in ("pc", "both"):
-            fetch_pc_interactions(args, store)
+            if args.deep_only:
+                print("--deep-only：跳过浅区互动流抓取，直接进深区")
+            else:
+                fetch_pc_interactions(args, store)
             if args.deep:
                 # 浅区抓完（或已在断点末尾早退）再进深区：深区是稀疏 offset 扫描，
                 # 与浅区的"二分总量 + set0 连续翻页"假设无关（docs/03 §四）。

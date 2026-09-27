@@ -77,11 +77,13 @@ def QR():
         raise
 
 
-def cookie():
+def cookie(user_file=None, force_qr=False):
+    """取登录 cookie。user_file 指定登录态文件名（不提问）；force_qr 忽略已存登录态直接出码。"""
     Config.init_flooder()
-    select_user = Config.read_files_in_folder()
-    if select_user:
-        return select_user
+    if not force_qr:
+        select_user = Config.read_files_in_folder(user_file)
+        if select_user:
+            return select_user
     # 获取 QQ空间 cookie
     qrsig = QR()
     ptqrtoken = ptqrToken(qrsig)
@@ -99,12 +101,14 @@ def cookie():
         try:
             r = requests.get(url, cookies=cookies)
             if "二维码未失效" in r.text:
-                # print(time.strftime('%H:%M:%S'), '二维码未失效')
                 pass
             elif "二维码认证中" in r.text:
                 print(time.strftime("%H:%M:%S"), "二维码认证中")
             elif "二维码已失效" in r.text:
-                print(time.strftime("%H:%M:%S"), "二维码已失效")
+                # 死码再轮询也不会成功，qrshow 换一张（qrsig 与 ptqrtoken 必须一起换）
+                print(time.strftime("%H:%M:%S"), "二维码已失效，重出")
+                qrsig = QR()
+                ptqrtoken = ptqrToken(qrsig)
             elif "登录成功" in r.text:
                 print(time.strftime("%H:%M:%S"), "登录成功")
                 cookies = requests.utils.dict_from_cookiejar(r.cookies)

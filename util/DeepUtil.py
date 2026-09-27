@@ -1,7 +1,7 @@
 """pc 互动流深区模式（opt-in，由 main.py --deep 调用）。
 
 深带（offset ~20500-21500）是**已删除旧说说的互动流残留**，内容最早到 2014-08（建号期），
-即库底 2015-10-11 之前那一年的补洞目标。它的服务特性与浅区截然不同，本模块把
+即库底 2015-08-17 之前那一年的补洞目标。它的服务特性与浅区截然不同，本模块把
 test/14-22 探针里验证过的方法学固化成生产代码：
 
   - **概率服务**：同一 (offset,set) 请求结果逐次翻转（空↔满），命中多为 set2/set3。
@@ -20,6 +20,7 @@ key/time/text、无 pictures/raw，把它导库会把图位锁死（feed_key 已
 """
 import collections
 import json
+import re
 import time
 
 import util.RequestUtil as Request
@@ -198,10 +199,22 @@ def fetch_deep_band(session, store, parse_fn, resumable, cells=None,
                     new_years, t0, aborted or "跑完")
 
 
+_DATE_RE = re.compile(r"(\d{4})年(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})")
+
+
+def time_sort_key(s):
+    """time 列是中文格式（`2015年8月17日 13:27`），直接按字符串排序会把
+    「2015年10月」排到「2015年8月」前面——`MIN(time)`/`ORDER BY time` 得出的
+    「库底」因此是错的（曾据此误记 2015-10-11，真值 2015-08-17）。日期比较一律走这里。"""
+    m = _DATE_RE.match(s or "")
+    return tuple(int(g) for g in m.groups()) if m else (0, 0, 0, 0, 0)
+
+
 def _summary(fetcher, ctl_status, results, before_pc, store, added, pics_added,
              new_years, t0, verdict):
     after_pc = store.count("pc")
-    times = sorted(r[0] for r in store.load_rows(columns="time", source="pc") if r[0])
+    times = sorted((r[0] for r in store.load_rows(columns="time", source="pc") if r[0]),
+                   key=time_sort_key)
     out = {
         "requests": fetcher.n_requests,
         "control": ctl_status,

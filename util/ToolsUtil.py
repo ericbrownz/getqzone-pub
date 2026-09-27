@@ -12,56 +12,8 @@ def replace_multiple_spaces(string):
     return replaced_string
 
 
-# 替换十六进制编码
-def process_old_html(message):
-    def replace_hex(match):
-        hex_value = match.group(0)
-        try:
-            byte_value = bytes(hex_value, "utf-8").decode("unicode_escape")
-        except Exception:
-            byte_value = hex_value
-        return byte_value
-
-    # 先尝试把常见的十六进制转义还原
-    new_text = re.sub(r"\\x[0-9a-fA-F]{2}", replace_hex, message)
-
-    # 更稳健地从JS返回体中抽取html字段，兼容 html:'...',opuin: 和 html:'...',is_public_pav: 等多种变体
-    match = re.search(r"html:'(.*?)',\w+:", new_text, re.S)
-    if match:
-        new_text = match.group(1)
-
-    # 还原常见的JS字符串转义（例如 \/, \', \n, \t 等），以便后续交给BeautifulSoup解析
-    new_text = new_text.replace("\\/", "/").replace("\\t", " ").replace("\\n", " ").replace("\\r", " ").replace("\\'", "'")
-
-    # HTML实体解码
-    new_text = html.unescape(new_text)
-
-    # === 关键修正：扩展正则范围，QQ空间喜欢用 i, b, span 等标签，甚至使用专门的 ui-mr8 类来隐藏字符 ===
-    # 1. 移除内联样式 display:none 的隐藏字符 (比如 <span style="display:none">t</span>)
-    new_text = re.sub(
-        r'<([a-zA-Z0-9]+)[^>]*?style=["\']?[^>]*?display\s*:\s*none[^>]*?>.*?</\1>',
-        "",
-        new_text,
-        flags=re.I | re.S,
-    )
-    
-    # 2. 移除带 ui-mr8/none 类的隐藏字符（只删内容短的，时间 <span class=" ui-mr8 state"> 保留）
-    new_text = remove_hidden_short_elements(new_text)
-
-    # Remove empty table cells
-    new_text = re.sub(r"<td[^>]*>\s*</td>", "", new_text, flags=re.I)
-
-    # 把连在一起的无意义的控制字符直接删掉，保留一个空格作为分隔
-    new_text = new_text.replace("\t", " ").replace("\xa0", " ")
-
-    # Collapse multiple whitespace into a single space
-    new_text = replace_multiple_spaces(new_text)
-
-    return new_text
-
-
 # 从一个 batch 的原始 JSONP 响应中提取所有条目各自的 html 字段
-# （process_old_html 只取第一条，会导致每批 10 条只解析出 1 条）
+# （上游只取第一条 html，会导致每批 10 条只解析出 1 条）
 def extract_all_html_fields(message):
     return [html for _, html in extract_items_with_keys(message)]
 

@@ -125,7 +125,6 @@ def parse_feed(feed):
         for pic in picdata:
             pictures.extend(pick_pic_urls(pic))
 
-    import util.ToolsUtil as Tools
     comments = []
     cc = original.get('cell_comment') or {}
     main_comment = cc.get('main_comment')

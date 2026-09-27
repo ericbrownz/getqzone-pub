@@ -2,7 +2,7 @@
 
 Logs in to QQ Zone via QR code, pulls your historical interaction feed and visible moments, and exports them to Excel, an offline HTML page, and local images. Every batch is written to a local SQLite store as it arrives, so an interrupted run loses nothing.
 
-Fork of [GetQzonehistory](https://github.com/LibraHp/GetQzonehistory) v1.0.0, released here as v1.0.1. Upstream was archived on 2026-09-04 — its source removed, and its README left pointing at [Gaoshu705/QzoneArchive](https://github.com/Gaoshu705/QzoneArchive), a Rust/Tauri + Vue 3 desktop app that lost its source the same day. This fork is the surviving copy of the original Python CLI. Architectural ideas from QzoneArchive (SQLite archive store, cursor-based pagination, rate-limit windows, skip-and-retry on bad pages) are carried over here.
+Fork of [GetQzonehistory](https://github.com/LibraHp/GetQzonehistory) v1.0.0, released here as v1.0.1. Upstream was archived on 2026-09-04 — its source removed, and its README left pointing at [Gaoshu705/QzoneArchive](https://github.com/Gaoshu705/QzoneArchive), a Rust/Tauri + Vue 3 desktop app that lost its source the same day. This fork is the surviving copy of the original Python CLI. Architectural ideas from QzoneArchive (SQLite archive store, cursor-based pagination, rate-limit windows, skip-and-retry on bad pages) are carried over here; see [docs/01-qzonearchive-comparison.md](docs/01-qzonearchive-comparison.md) for the side-by-side review.
 
 ## Outputs
 
@@ -24,7 +24,7 @@ Only content present in the feed / visible moments is available; posts visible o
 ## Fixes & improvements (vs upstream)
 
 - Parse every entry per batch — upstream extracted only the first `html` field from each 10-item response
-- O(n) dedup by `published time (nearest minute) + content`, replacing the old O(n²) pairwise comparison
+- Dedup by primary key instead of the old O(n²) pairwise comparison — upstream compared every pair; later revisions settled on the store's `feed_key` (with a `time + content` hash only as a fallback when the response carries no key)
 - Strip `赞了 / 评论了 / 回复了 / 留言 / 赞过 / 觉得很赞 / 访问了空间…` prefixes to restore deleted content, keeping the forward chain
 - Remove QQ anti-crawl hidden characters (e.g. `<i class="ui-mr8">`) by content length so time labels survive
 - Normalize image URLs (`\/`, `&amp;`) to fix "Invalid URL" download errors
@@ -38,7 +38,8 @@ Only content present in the feed / visible moments is available; posts visible o
 - **SQLite store** (`resource/store/<qq>.db`) instead of in-memory lists: Excel and HTML are export views over the database, so a crash or Ctrl-C mid-run costs nothing
 - **Resume by offset** — checkpoints per stream; bad pages are recorded to `skips.jsonl` and retried once the main loop finishes
 - **One row per original moment** — the PC interaction feed is aggregated back into the posts it belongs to, with interactors listed underneath instead of repeated per like/comment
-- **Action words preserved** (`赞了` / `评论` / `回复了` …) so you can see *how* someone interacted, not just that they did
+- **Action words preserved** (`赞了` / `评论` / `回复了` …) so you can see *how* someone interacted, not just that they did. Applied at parse time, and the store backfills the column on a re-fetch — rows captured before this landed keep a NULL `action` until you re-run the PC stream with `--fresh`
+- **Raw responses archived** — `--dump-raw DIR` writes every PC response body verbatim, and each parsed row keeps its own item HTML in `raw_json`. Adding a field to the parser (e.g. the interaction nickname) can then be replayed offline over the archive instead of re-scraping for hours
 - **Optional `mobile` source** (`get_feeds`) as an alternative or complement to the PC feed
 - **`--deep`**: sparse scan of the deep band (offset ~20500–21500) for interaction traces of moments deleted years ago — the band serves probabilistically and throttles harder than the normal feed, so it has its own rate window and its own skip records
 
@@ -62,7 +63,7 @@ uv pip install -r requirements.txt   # or: python -m venv .venv && pip install -
 python main.py
 ```
 
-Scan the QR code with your phone to log in; scraping and export run automatically. On later runs you can pick a saved login or enter `0` to re-scan.
+Scan the QR code with your phone to log in; scraping and export run automatically. On later runs you can pick a saved login or enter `0` to re-scan. Pass `--user NAME` to skip that picker when stdin is not a TTY.
 
 ### main.py options
 
@@ -72,12 +73,15 @@ Everything has a working default — plain `python main.py` is a full run.
 | --- | --- | --- |
 | `--source {pc,mobile,both}` | `pc` | Which interaction stream to pull. `pc` is the feed the exports are built around; `mobile` (`get_feeds`) is an alternative/complement; `both` runs both |
 | `--fresh` | off | Ignore saved checkpoints and refetch from the start |
+| `--user NAME` | prompt | Use the saved login named `NAME` (a file under `resource/user/`) instead of prompting — needed when stdin is not a TTY. A stale saved login then falls back to a QR scan by itself instead of exiting |
 | `--rate N` | `300` | Request budget: at most N pages per 10-minute window (the PC source also waits 3.5–4.5 s between pages) |
 | `--max-batches N` | no limit | Stop after N batches. The checkpoint is kept — rerun to continue |
 | `--max-pages N` | until `hasmore=0` | Page cap, `mobile` source only |
 | `--deep` | off | After the normal feed, scan the sparse deep band (offset ~20500–21500) for interaction traces of moments deleted years ago. `pc`/`both` only |
+| `--deep-only` | off | Skip the normal feed and go straight to the deep band (implies `--deep`). Use it when the shallow feed is already complete — otherwise it runs first and can eat the whole login session |
 | `--deep-rate N` | `60` | Separate request budget for the deep band, which throttles harder than the normal feed |
 | `--deep-offsets "a,b,c"` | 9 built-in cells | Override the deep-band offset grid |
+| `--dump-raw DIR` | off | Archive every PC response body verbatim into `DIR`. Response bodies carry real nicknames and QQ numbers — keep it under a `.gitignore`d path such as `resource/temp/dump` |
 | `--no-open` | off | Don't open the result folder when the export finishes |
 
 Common runs:

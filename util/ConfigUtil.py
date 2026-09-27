@@ -49,12 +49,17 @@ def _load_cookie_file(file_path):
     return data
 
 
-def read_files_in_folder():
+def read_files_in_folder(name=None):
     # 获取文件夹下的所有文件
     files = os.listdir(user_path)
     # 如果文件夹为空
     if not files:
         return None
+    if name:
+        # --user 指定了就直接用：无 TTY（后台/重定向）时 input() 会 EOFError
+        if name not in files:
+            raise FileNotFoundError(f"未找到登录态 {user_path}{name}（现有：{files}）")
+        return _load_cookie_file(os.path.join(user_path, name))
     # 输出文件列表
     print("已登录用户列表:")
     for i, file in enumerate(files):

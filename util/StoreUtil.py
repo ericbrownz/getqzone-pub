@@ -64,11 +64,12 @@ class Store:
     # ---------- feeds ----------
     def upsert_feed(self, feed_key, source, time_s=None, content=None,
                     pictures=None, comments=None, raw_json=None, action=None):
-        """幂等写入：同 feed_key 重复抓到时保留首条，只补 action 空值。
+        """幂等写入：同 feed_key 重复抓到时保留首条，只补 action / raw_json 的空值。
 
-        重抓回填：老库（E3 之前）action 全是 NULL，若沿用 INSERT OR IGNORE，
-        重抓时所有 feed_key 都已存在 → 一条都不会回填，E3 就白采了。所以冲突时
-        用 DO UPDATE，只在新 action 非空且旧值为空时写入，不动其它列。
+        重抓回填：老库（E3 之前）action 全是 NULL、raw_json 全是空串，若沿用
+        INSERT OR IGNORE，重抓时所有 feed_key 都已存在 → 一条都不会回填，E3 就白采了。
+        所以冲突时用 DO UPDATE，只在新值非空且旧值为空时写入，不动其它列。
+        （raw_json 同理：老库存量行当年写死 ""，留着它就能离线重算 action/actor。）
         feed_key 为空/None 时退化为 hash(时间+内容)（标注非幂等，见 docs/02 B 风险节）。
         返回是否有行被写入或回填。
         """
@@ -78,9 +79,13 @@ class Store:
             "INSERT INTO feeds "
             "(feed_key, time, content, pictures, comments, source, raw_json, fetched_at, action) "
             "VALUES (?,?,?,?,?,?,?,?,?) "
-            "ON CONFLICT(feed_key) DO UPDATE SET action=excluded.action "
-            "WHERE excluded.action IS NOT NULL AND excluded.action != '' "
-            "  AND (feeds.action IS NULL OR feeds.action = '')",
+            "ON CONFLICT(feed_key) DO UPDATE SET "
+            "  action   = COALESCE(NULLIF(feeds.action, ''),   NULLIF(excluded.action, '')), "
+            "  raw_json = COALESCE(NULLIF(feeds.raw_json, ''), NULLIF(excluded.raw_json, '')) "
+            "WHERE (excluded.action IS NOT NULL AND excluded.action != '' "
+            "       AND (feeds.action IS NULL OR feeds.action = '')) "
+            "   OR (excluded.raw_json IS NOT NULL AND excluded.raw_json != '' "
+            "       AND (feeds.raw_json IS NULL OR feeds.raw_json = ''))",
             (feed_key, time_s, content, pictures,
              json.dumps(comments, ensure_ascii=False) if comments is not None else None,
              source, raw_json,
