@@ -1,6 +1,7 @@
 .idea
 **/.DS_Store
 **/__pycache__/
+/.pytest_cache/
 /myenv/
 /.venv/
 resource/temp
@@ -12,3 +13,8 @@ test/resopnse.txt
 test/*.json
 
 resource/store
+
+/dist/
+/build/
+/*.spec
+getqzone.egg-info/

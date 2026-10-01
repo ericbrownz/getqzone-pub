@@ -7,7 +7,7 @@ import requests
 from tqdm import tqdm
 
 import util.SessionUtil as SessionUtil
-import util.ToolsUtil as Tool
+import util.ToolsUtil as Tools
 
 USER_QZONE_INFO = 'user_qzone_info.json'
 QZONE_MOMENTS_ALL = 'qzone_moments_all.json'
@@ -25,28 +25,25 @@ def get_visible_moments_list(session=None, resumable=None, fresh=False, store=No
 
     workdir = _workdir(session)
 
-    # 1. 获取说说总条数
-    user_qzone_info = Tool.read_txt_file(workdir, USER_QZONE_INFO)
+    # 1. 获取说说总条数（本地缓存优先，仅首次请求）
+    user_qzone_info = Tools.read_txt_file(workdir, USER_QZONE_INFO)
     if not user_qzone_info:
-        # 样本缓存未找到，开始请求获取样本
-        qq_userinfo_response = get_user_qzone_info(session, 1)
-        Tool.write_txt_file(workdir, USER_QZONE_INFO, qq_userinfo_response)
-        user_qzone_info = Tool.read_txt_file(workdir, USER_QZONE_INFO)
+        user_qzone_info = get_user_qzone_info(session, 1)
+        Tools.write_txt_file(workdir, USER_QZONE_INFO, user_qzone_info)
 
-    if not Tool.is_valid_json(user_qzone_info):
+    if not Tools.is_valid_json(user_qzone_info):
         print("获取QQ空间信息失败")
         return None
-    json_dict = json.loads(user_qzone_info)
-    total_moments_count = json_dict['total']
+    total_moments_count = json.loads(user_qzone_info)['total']
     print(f'你的未删除说说总条数{total_moments_count}')
 
     # 当前未删除说说总数为0, 直接返回
     if total_moments_count == 0:
         return None
 
-    # 2. 获取所有说说数据（C1：断点续传，按页码 pos 续）
+    # 2. 获取所有说说数据（断点续传，按页码 pos 续）
     print("开始获取所有未删除说说")
-    qzone_moments_all = Tool.read_txt_file(workdir, QZONE_MOMENTS_ALL)
+    qzone_moments_all = Tools.read_txt_file(workdir, QZONE_MOMENTS_ALL)
     start_page = 0
     all_page_data = []
     resumed = False
@@ -59,14 +56,11 @@ def get_visible_moments_list(session=None, resumable=None, fresh=False, store=No
                 all_page_data = resumable.load_texts()
                 resumed = True
                 print(f"从断点第 {start_page} 页继续（已完成 {len(all_page_data)} 条）")
-    if qzone_moments_all and not resumed:
-        pass  # 完整缓存命中，直接用
-    else:
-        default_page_size = 30  # 默认一页30条
-        total_page_num = math.ceil(total_moments_count / default_page_size)  # 总页数
+    if resumed or not qzone_moments_all:  # 完整缓存命中则直接跳过抓取
+        default_page_size = 30
+        total_page_num = math.ceil(total_moments_count / default_page_size)
         seen_tids = {item.get('tid') for item in all_page_data if item.get('tid')}
         for current_page_num in range(start_page, total_page_num):
-            # 数据偏移量
             pos = current_page_num * default_page_size
             qq_userinfo_response = get_user_qzone_info(session, default_page_size, pos)
             if qq_userinfo_response is None:
@@ -88,47 +82,35 @@ def get_visible_moments_list(session=None, resumable=None, fresh=False, store=No
                         resumable.append_texts(new_items)
                         resumable.save_checkpoint(current_page_num)
             time.sleep(0.02)
-        qq_userinfo = json.dumps({"msglist": all_page_data}, ensure_ascii=False, indent=2)
-        Tool.write_txt_file(workdir, QZONE_MOMENTS_ALL, qq_userinfo)
-        qzone_moments_all = Tool.read_txt_file(workdir, QZONE_MOMENTS_ALL)
+        Tools.write_txt_file(workdir, QZONE_MOMENTS_ALL,
+                             json.dumps({"msglist": all_page_data}, ensure_ascii=False, indent=2))
+        qzone_moments_all = Tools.read_txt_file(workdir, QZONE_MOMENTS_ALL)
         if resumable is not None:
             resumable.clear_checkpoint()  # 全量完成，断点使命结束
 
-    if not Tool.is_valid_json(qzone_moments_all):
+    if not Tools.is_valid_json(qzone_moments_all):
         print("获取QQ空间说说失败")
         return None
-    json_dict = json.loads(qzone_moments_all)
-    qzone_moments_list = json_dict['msglist']
+    qzone_moments_list = json.loads(qzone_moments_all)['msglist']
     print(f'已获取到数据的说说总条数{len(qzone_moments_list)}')
 
     # 3. 添加说说列表
     texts = []
     for item in tqdm(qzone_moments_list, desc="获取未删除说说", unit="条"):
-        content = item['content'] if item['content'] else ""
+        content = item['content'] or ""
         nickname = item['name']
-        create_time = Tool.format_timestamp(item['created_time'])
-        pictures = ""
-        # 如果有图片
-        if 'pic' in item:
-            for index, picture in enumerate(item['pic']):
-                pictures += picture['url1'] + ","
-        if 'video' in item:
-            for index, picture in enumerate(item['video']):
-                pictures += picture['url1'] + ","
+        create_time = Tools.format_timestamp(item['created_time'])
+        picture_urls = [pic['url1'] for pic in item.get('pic', [])]
+        picture_urls += [video['url1'] for video in item.get('video', [])]
+        pictures = ",".join(picture_urls)
 
-        # 去除最后一个逗号
-        pictures = pictures[:-1] if pictures != "" else pictures
-        comments = []
-        if 'commentlist' in item:
-            for index, commentToMe in enumerate(item['commentlist']):
-                comment_content = commentToMe['content']
-                comment_create_time = commentToMe['createTime2']
-                comment_nickname = commentToMe['name']
-                comment_uin = commentToMe['uin']
-                # 时间，内容，昵称，QQ号
-                comments.append([comment_create_time, comment_content, comment_nickname, comment_uin])
+        comments = [
+            # 时间，内容，昵称，QQ号
+            [c['createTime2'], c['content'], c['name'], c['uin']]
+            for c in item.get('commentlist', [])
+        ]
 
-        # 格式：时间、内容、图片链接、转发内容、评论内容
+        # 格式：时间、内容、图片链接、评论
         row = [create_time, f"{nickname} ：{content}", pictures, comments]
         if store is not None:
             store.upsert_feed(item.get('tid'), source="taotao",
@@ -144,13 +126,13 @@ def get_user_qzone_info(session, page_size, offset=0):
     url = 'https://user.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msglist_v6'
 
     params = {
-        'uin': f'{session.uin}',
+        'uin': str(session.uin),
         'ftype': '0',
         'sort': '0',
-        'pos': f'{offset}',
-        'num': f'{page_size}',
+        'pos': str(offset),
+        'num': str(page_size),
         'replynum': '100',
-        'g_tk': f'{session.g_tk}',
+        'g_tk': str(session.g_tk),
         'callback': '_preloadCallback',
         'code_version': '1',
         'format': 'jsonp',
@@ -158,13 +140,12 @@ def get_user_qzone_info(session, page_size, offset=0):
     }
     try:
         response = requests.get(url, headers=session.taotao_headers(), params=params)
-    except Exception as e:
+    except requests.RequestException as e:
         print(e)
         return None
-    rawResponse = response.text
-    # 使用正则表达式去掉 _preloadCallback()，并提取其中的 JSON 数据
-    raw_txt = re.sub(r'^_preloadCallback\((.*)\);?$', r'\1', rawResponse, flags=re.S)
-    # 再转一次是为了去掉响应值本身自带的转义符http:\/\/
+    raw_response = response.text
+    # 响应是 jsonp 包裹 _preloadCallback(...)，剥掉外壳只留里面的 JSON
+    raw_txt = re.sub(r'^_preloadCallback\((.*)\);?$', r'\1', raw_response, flags=re.S)
     json_dict = json.loads(raw_txt)
     if json_dict['code'] != 0:
         print(f"错误 {json_dict['message']}")
@@ -172,5 +153,5 @@ def get_user_qzone_info(session, page_size, offset=0):
     return json.dumps(json_dict, indent=2, ensure_ascii=False)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     get_visible_moments_list()

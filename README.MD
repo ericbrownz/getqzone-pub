@@ -10,14 +10,11 @@ Written to `resource/result/<your-qq>/`:
 
 | File | Content |
 | --- | --- |
-| `*_全部列表.xlsx` | every captured post |
-| `*_说说列表.xlsx` | your own moments |
-| `*_转发列表.xlsx` | forwarded moments |
-| `*_留言列表.xlsx` | received messages |
-| `*_其他列表.xlsx` | other activity |
-| `*_好友列表.xlsx` | friends seen while scraping |
-| `*_说说网页版.html` | moments rendered as a web page |
-| `pic/` | offline-downloaded images |
+| `*_归档.xlsx` | one workbook, one sheet per bucket: 说说 / 转发 / 留言 / 其他 / 好友 (empty buckets get no sheet) |
+| `*_说说网页版.html` | moments rendered as a web page; images load from `pic/` first, so it browses fully offline |
+| `pic/` | original-size images, interactor avatars, and emoji — named by URL fingerprint, with `av_<qq>.jpg` for avatars and `em_<code>.gif` for emoji |
+
+The exported folder is self-contained: open the HTML from disk and it needs no network, no login, no running server. Copy the whole `<your-qq>/` folder anywhere and it keeps working.
 
 Only content present in the feed / visible moments is available; posts visible only to yourself cannot be fetched.
 
@@ -82,6 +79,13 @@ Everything has a working default — plain `python main.py` is a full run.
 | `--deep-rate N` | `60` | Separate request budget for the deep band, which throttles harder than the normal feed |
 | `--deep-offsets "a,b,c"` | 9 built-in cells | Override the deep-band offset grid |
 | `--dump-raw DIR` | off | Archive every PC response body verbatim into `DIR`. Response bodies carry real nicknames and QQ numbers — keep it under a `.gitignore`d path such as `resource/temp/dump` |
+| `--retry-skips` | off | Only retry the bad pages recorded in `skips.jsonl` — no main fetch loop |
+| `--export-only` | off | Rebuild the Excel/HTML views from whatever is already in the store — no fetch, no image download, no login check, so no network needed (an expired login won't trigger a QR scan) |
+| `--with-pics` | off | With `--export-only`: also download the images the web page uses (originals, plus interactor avatars and emoji) into `pic/`. Existing files are skipped, so a rerun only fills the gaps. Touches the image CDN only — still no login check, no QR scan |
+| `--force-pics` | off | With `--with-pics`: re-download files already in `pic/` too. Run it once when upgrading from a version that stored medium-size images, to replace them with originals; after that `--with-pics` alone suffices |
+| `--maintain KIND` | off | Offline maintenance tool (one action per run): `actors` fills the interactor `uin` into `feeds.actor` from archived `raw_json` (a comment row carries no interactor in its key); `mobile` normalises stored `mobile` hex keys to their PC plaintext form (colliding rows merged) and recomputes bodies; `times` completes yearless time strings; `reparse-pc` / `reparse-mobile` recompute stored rows from archived `raw_json` and overwrite. Local only — no network — and backs up the database first. `--user NAME` supplies the account |
+| `--fix-times` | off | Deprecated alias of `--maintain times` |
+| `--replay-dump DIR` | off | Offline: replay a `--dump-raw` PC response directory into the store — new keys inserted, old keys overwritten (recovers card/album moments the old selectors dropped). Local only; backs up the database first |
 | `--no-open` | off | Don't open the result folder when the export finishes |
 
 Common runs:

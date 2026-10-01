@@ -1,15 +1,22 @@
-import re
+import html
 import json
 import os
+import re
 import time
-import html
+from datetime import datetime
+from urllib.parse import unquote
 
 
-# 去除多余的空格
-def replace_multiple_spaces(string):
-    pattern = r"\s+"
-    replaced_string = re.sub(pattern, " ", string)
-    return replaced_string
+def share_url(raw):
+    """分享卡片的落地链接：`mqqapi://…` 微应用链接里真正的地址在 `fakeUrl` 参数（也见过带
+    `http://` 前缀的双协议串，一样走 fakeUrl）；非 microapp 链接原样返回。
+    """
+    raw = (raw or "").strip()
+    if "mqqapi://" in raw:
+        matched = re.search(r"[?&]fakeUrl=([^&]+)", raw)
+        if matched:
+            return html.unescape(unquote(matched.group(1)))
+    return raw
 
 
 # 从一个 batch 的原始 JSONP 响应中提取所有条目各自的 html 字段
@@ -19,8 +26,7 @@ def extract_all_html_fields(message):
 
 
 # 同上，但同时返回每条 item 的稳定 key（B 线 feed_key 用，形如 时间戳_uin_十六进制；
-# 与 html 同层且 key 先于 html，一一对应；纯文本类事件个别为空串）。
-# 见 docs/02 B 线风险节 2026-09-06 验证。
+# 与 html 同层且 key 先于 html，一一对应；纯文本类事件个别为空串）。见 docs/02 B 线风险节。
 def extract_items_with_keys(message):
     def replace_hex(match):
         hex_value = match.group(0)
@@ -83,7 +89,7 @@ def extract_items_with_keys(message):
         text = remove_hidden_short_elements(text)
         text = re.sub(r"<td[^>]*>\s*</td>", "", text, flags=re.I)
         text = text.replace("\t", " ").replace("\xa0", " ")
-        text = replace_multiple_spaces(text)
+        text = re.sub(r"\s+", " ", text)
         items.append((key, text))
 
     return items
@@ -132,153 +138,82 @@ def show_author_info():
     print(f"{RED}Always free and open-source!{RESET}")
 
 
-def get_html_template():
-    # HTML模板
-    html_template = """
-    <!DOCTYPE html>
-    <html lang="zh-CN">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>QQ空间动态</title>
-        <style>
-            body {{
-                font-family: Arial, sans-serif;
-                background-color: #f5f5f5;
-            }}
-            .post {{
-                background-color: #333;
-                color: #fff;
-                padding: 20px;
-                margin: 20px;
-                border-radius: 10px;
-            }}
-            .avatar {{
-                float: left;
-                margin-right: 20px;
-            }}
-            .avatar img {{
-                width: 50px;
-                height: 50px;
-                border-radius: 50%;
-            }}
-            .content {{
-                overflow: hidden;
-            }}
-            .nickname {{
-                font-size: 1.2em;
-                font-weight: bold;
-            }}
-            .time {{
-                color: #999;
-                font-size: 0.9em;
-            }}
-            .message {{
-                margin-top: 10px;
-                font-size: 1.1em;
-            }}
-            .image {{
-                margin-top: 10px;
-                display: grid;
-                grid-template-columns: repeat(3, 1fr); /* 将图片分成3列 */
-                grid-gap: 10px; /* 设置图片之间的间距 */
-                justify-items: center; /* 居中显示图片 */
-            }}
-            .image img {{
-                width: 100%; /* 图片宽度100%填充父容器 */
-                height: auto; /* 固定高度150px */
-                object-fit: cover; /* 保持比例裁剪图片 */
-                max-width: 33vw; /* 限制图片的最大宽度 */
-                max-height: 33vh; /* 限制图片的最大高度 */
-                border-radius: 10px;
-                cursor: pointer;
-            }} 
-            .comments {{
-                margin-top: 5px; /* 调整这里的值来减少间距 */
-                background-color: #444;
-                padding: 2px 10px 10px 10px;
-                border-radius: 10px;
-            }}
-            .comment {{
-                margin-top: 10px; /* 调整单个评论之间的间距 */
-                padding: 10px;
-                background-color: #555;
-                border-radius: 10px;
-                color: #fff;
-            }}
-            .comment .avatar img {{
-                width: 30px;
-                height: 30px;
-            }}
-            .comment .nickname {{
-                font-size: 1em;
-                font-weight: bold;
-            }}
-            .comment .time {{
-                font-size: 0.8em;
-                color: #aaa;
-            }}
-        </style>
-    </head>
-    <body>
-
-        {posts}
-        <script>
-            // 为所有图片添加点击事件
-            document.querySelectorAll(".image img").forEach(img => {{
-                img.addEventListener("click", function() {{
-                    window.open(this.src, '_blank');  // 打开图片链接并在新标签页中展示
-                }});
-            }});
-        </script>
-    </body>
-    </html>
-    """
-
-    # 生成每个动态的HTML内容
-    post_template = """
-    <div class="post">
-        <div class="avatar">
-            <img src="{avatar_url}" alt="头像">
-        </div>
-        <div class="content">
-            <div class="nickname">{nickname}</div>
-            <div class="time">{time}</div>
-            <div class="message">{message}</div>
-            {image}
-        </div>
-         {comments}
-    </div>
-    """
-
-    # 评论区HTML模板
-    comment_template = """
-    <div class="comments">
-        <div class="comment">
-            <div class="avatar">
-                <img src="{avatar_url}" alt="评论头像">
-            </div>
-            <div class="nickname">{nickname}</div>
-            <div class="time">{time}</div>
-            <div class="message">{message}</div>
-        </div>
-    </div>
-    """
-
-    return html_template, post_template, comment_template
-
-
-# 格式化时间
 def format_timestamp(timestamp):
-    time_struct = time.localtime(timestamp)
-    formatted_time = time.strftime("%Y年%m月%d日 %H:%M:%S", time_struct)
-    return formatted_time
+    return time.strftime("%Y年%m月%d日 %H:%M:%S", time.localtime(timestamp))
+
+
+# PC 互动流只对本年的动态省年份（「5月8日 14:24」），跨年才给完整串。
+_YEARLESS_TIME = re.compile(r"^(\d{1,2})月(\d{1,2})日(\s+\d{1,2}:\d{2}(?::\d{2})?)?$")
+
+
+def fill_missing_year(time_str, year):
+    """给无年份的时间串补上 year；已带年份或 year 为空则原样返回。
+
+    year 必须来自**绝对**来源（li id 时间戳、落库时刻），不能用「现在」：重放老留档时
+    「现在」早已不是抓取当年，会补出错的年份。
+    """
+    text = (time_str or "").strip()
+    matched = _YEARLESS_TIME.match(text)
+    if not year or matched is None:
+        return text
+    return f"{int(year)}年{int(matched.group(1))}月{int(matched.group(2))}日{matched.group(3) or ''}"
+
+
+def year_from_li_id(li_id):
+    """互动流 li 的 id（`fct_{uin}_{类型}_{ts}_1_1`）→ 时间戳所在年份；取不到返回 None。
+
+    ts 恒在第 5 段且为 10 位；兜底扫描要排除第 2 段 uin——10 位 QQ 号也存在。
+    """
+    parts = str(li_id or "").split("_")
+    candidates = [parts[4]] if len(parts) > 4 else []
+    candidates += [part for i, part in enumerate(parts) if i not in (1, 4)]
+    for part in candidates:
+        if len(part) == 10 and part.isdigit() and 1_000_000_000 <= int(part) < 2_200_000_000:
+            return time.localtime(int(part)).tm_year
+    return None
+
+
+def time_parts(time_str):
+    """时间串 → (年, 月) 字符串，供网页版右侧导航分档；解不出来返回 ("", "")。"""
+    parsed = safe_strptime(time_str)
+    if parsed is not None:
+        return str(parsed.year), str(parsed.month)
+    matched = re.match(r"(\d{4})年(\d{1,2})月", str(time_str or ""))
+    if matched:
+        return matched.group(1), str(int(matched.group(2)))
+    return "", ""
+
+
+def date_part(time_str):
+    """时间串的日期部分：「2024年6月18日 14:20」→「2024年6月18日」。"""
+    return str(time_str or "").strip().split(" ")[0]
+
+
+_LI_ID = re.compile(r'<li[^>]*\bid="([^"]*)"')
+
+
+def li_id_of(raw_html):
+    """从留档的 li 片段里取出 li 的 id；取不到返回空串。"""
+    matched = _LI_ID.search(raw_html or "")
+    return matched.group(1) if matched else ""
+
+
+def repair_yearless_time(time_str, raw_html="", fetched_at=""):
+    """补全无年份的时间串：能补返回新串，不需要补/补不了返回 None。
+
+    年份优先取留档 li id 的时间戳，没有留档才退回落库时刻的年份（服务端「省年份」= 本年）。
+    """
+    if _YEARLESS_TIME.match(str(time_str or "").strip()) is None:
+        return None
+    year = year_from_li_id(li_id_of(raw_html))
+    if year is None:
+        matched = re.match(r"(\d{4})", str(fetched_at or ""))
+        year = int(matched.group(1)) if matched else None
+    return fill_missing_year(time_str, year) if year else None
 
 
 # 解析动态时间字符串（接口落盘/Excel 读回共用）；失败返回 None
 def safe_strptime(date_str):
-    from datetime import datetime
-
     if not isinstance(date_str, str):
         return None
     date_str = date_str.strip()
@@ -298,26 +233,51 @@ def safe_strptime(date_str):
     return None
 
 
-# 判断json是否合法
+# 昵称哨兵：parse_li 在 get_text() 前裹上原文并记下 uin（uin 在 q_namecard 的 link 里，
+# 扁平化后就没有了）。私用区字符，正文不会自然出现。
+# 形如 \ue000uin\ue002昵称\ue001；uin 缺（老库行、非 q_namecard）时退化成 \ue000昵称\ue001。
+NAME_OPEN = ""
+NAME_SEP = ""
+NAME_CLOSE = ""
+_NAME_SPAN = re.compile(NAME_OPEN + "(?:([^" + NAME_SEP + "]*)" + NAME_SEP + ")?(.*?)" + NAME_CLOSE, re.S)
+
+
+def split_names(text):
+    """正文 → [(昵称, uin 或 ""), (普通文本, None), ...]，哨兵已剥。
+
+    老库行没有哨兵，整体就是一段普通文本。
+    """
+    parts = []
+    pos = 0
+    for matched in _NAME_SPAN.finditer(text or ""):
+        if matched.start() > pos:
+            parts.append((text[pos:matched.start()], None))
+        parts.append((matched.group(2), matched.group(1) or ""))
+        pos = matched.end()
+    if pos < len(text or ""):
+        parts.append((text[pos:], None))
+    return parts or [(text or "", None)]
+
+
+def strip_names(text):
+    """去掉哨兵，还原纯文本（Excel 等不该见到哨兵的出口用）。"""
+    return "".join(part for part, _ in split_names(text))
+
 def is_valid_json(json_data):
     try:
-        json_object = json.loads(json_data)  # 尝试解析JSON数据
-        return True  # 解析成功，是有效的JSON
-    except ValueError as e:  # 解析失败，捕获异常
-        print(e)
-        return False  # 解析失败，不是有效的JSON
+        json.loads(json_data)
+        return True
+    except ValueError:
+        return False
 
 
-# 写入信息
 def write_txt_file(workdir, file_name, data):
-    if not os.path.exists(workdir):
-        os.makedirs(workdir)
+    os.makedirs(workdir, exist_ok=True)
     base_path_file_name = os.path.join(workdir, file_name)
     with open(base_path_file_name, "w", encoding="utf-8") as file:
         file.write(data)
 
 
-# 读取文件信息
 def read_txt_file(workdir, file_name):
     base_path_file_name = os.path.join(workdir, file_name)
     if os.path.exists(base_path_file_name):
@@ -326,11 +286,12 @@ def read_txt_file(workdir, file_name):
     return None
 
 
-# QQ空间表情替换 [em]xxx[/em] 为 <img src="http://qzonestyle.gtimg.cn/qzone/em/xxx.gif">
+# QQ空间表情替换 [em]xxx[/em] 为 <img src="http://qzonestyle.gtimg.cn/qzone/em/{code}.gif">。
+# 码来自抓取数据、进 HTML 属性前必须转义（含 " 即可逃出属性注入 onerror）。
 def replace_em_to_img(match):
-    # 获取匹配的 xxx 部分
-    emoji_code = match.group(1)
-    return f'<img src="http://qzonestyle.gtimg.cn/qzone/em/{emoji_code}.gif" alt="{emoji_code}">'
+    code = html.escape(match.group(1), quote=True)
+    return (f'<img src="http://qzonestyle.gtimg.cn/qzone/em/{code}.gif" '
+            f'alt="{code}">')
 
 
 def get_content_from_split(content):
@@ -338,8 +299,6 @@ def get_content_from_split(content):
     return content_split[1].strip() if len(content_split) > 1 else content.strip()
 
 
-# 判断两个字符串是否相等
+# 判断两个字符串冒号后正文是否相等
 def is_any_mutual_exist(str1, str2):
-    str1 = get_content_from_split(str1)
-    str2 = get_content_from_split(str2)
-    return str1 == str2
+    return (get_content_from_split(str1) == get_content_from_split(str2))

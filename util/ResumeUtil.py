@@ -7,10 +7,9 @@ mobile_ / pcdeep_ / probe_ 等），互不覆盖：
     <prefix><uin>_skips.jsonl       坏页记录：{"pos": offset/页码, "reason": 类型, "detail": str}
     <prefix><uin>_ratelimit.json    速率窗口状态：{"window_start": ts, "count": N}
 
-流 A（PC 互动流）用 pos=**已完成的最大批次下标**（`offset = pos × 10`，count 固定 10）；
-流 B（taotao 说说）用 pos=页码；mobile 源用
-pos=已完成页数且 checkpoint 额外存游标 attachinfo（自包含可序列化，参照
-QzoneArchive advance_feed_cursor 的用法：存下页游标即可续传）。
+pos 的含义随流而变：流 A=已完成的最大批次下标（`offset = pos × 10`）、流 B=页码、
+mobile=已完成页数且 checkpoint 额外存游标 attachinfo（自包含可序列化，参照 QzoneArchive
+advance_feed_cursor：存下页游标即可续传）。
 """
 import json
 import os
@@ -34,11 +33,9 @@ def classify_body(text):
         return "need_login"
     if "waf.tencent.com" in text or "waf.tencent-qcloud.com" in text:
         return "waf_block"
-    # -10001 "network busy"：服务端软限流。**语义上 ≠ "该页为空"**——不识别的话
-    # 调用方会把限流响应当空页，据此误判"已到底"或"配额耗尽"（F1 落库即栽在这）。
-    # 归为可重试：走 skips 记录，冷却后由 retry_skips 补回。
-    # 匹配用带引号的 JSON 形态，不用裸子串 "network busy"——否则某条说说正文里恰好
-    # 出现这俩词就会被误判成限流（mock 验收 test/22 暴露的假阳性）。
+    # -10001 "network busy" 是软限流，语义上 ≠ "该页为空"——当空页会误判"已到底/配额耗尽"。
+    # 归为可重试（走 skips，冷却后由 retry_skips 补回）。匹配用带引号的 JSON 形态而非裸子串
+    # "network busy"——否则某条说说正文里恰好出现这俩词就被误判成限流（test/22 暴露的假阳性）。
     if '"code":-10001' in text or '"message":"network busy"' in text:
         return "throttled"
     return None
@@ -51,8 +48,11 @@ def classify_error(status, text):
     if status >= 500:
         # WAF 挑战页（如 501 跳 waf.tencent.com）是风控，不是普通 5xx
         return classify_body(text) or "http_5xx"
-    if status == 403 or status == 429:
+    if status == 403:
         return "forbidden"
+    if status == 429:
+        # 瞬时限频按可重试处理——前几轮改的 429 归 FATAL 会把数小时抓取直接中止
+        return "throttled"
     return classify_body(text)
 
 
@@ -66,9 +66,7 @@ class ResumeUtil:
         self.texts_path = f"{base}{prefix}{uin}_texts.jsonl"
         self.skips_path = f"{base}{prefix}{uin}_skips.jsonl"
         self.rate_path = f"{base}{prefix}{uin}_ratelimit.json"
-        self._rate_limit = None
-        if rate_limit is not None:
-            self.enable_rate_limit(rate_limit)
+        self._rate_limit = max(1, int(rate_limit)) if rate_limit is not None else None
 
     # ---------- C1 checkpoint ----------
     def load_checkpoint(self):
@@ -79,10 +77,8 @@ class ResumeUtil:
             return None
 
     def save_checkpoint(self, pos, extra=None):
-        """原子写断点（先写临时文件再替换，防止中断写坏 JSON）。
-
-        extra 是附加状态 dict（如 mobile 源的 {"cursor": attachinfo}），与 pos 一起存。
-        """
+        """原子写断点（先写临时文件再替换，防中断写坏 JSON）。extra 是附加状态 dict
+        （如 mobile 源的 {"cursor": attachinfo}），与 pos 一起存。"""
         tmp = self.checkpoint_path + ".tmp"
         doc = {"pos": pos}
         if extra:
@@ -153,9 +149,6 @@ class ResumeUtil:
                 f.write(json.dumps(s, ensure_ascii=False) + "\n")
 
     # ---------- C3 速率窗口 ----------
-    def enable_rate_limit(self, pages):
-        self._rate_limit = max(1, int(pages))
-
     def wait_for_slot(self, quiet=False):
         """获取一个请求配额；窗口超限则倒计时等待。落盘状态支持跨进程/中断恢复。"""
         if self._rate_limit is None:

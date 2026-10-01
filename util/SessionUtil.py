@@ -1,9 +1,6 @@
 """唯一持有登录态（cookie/g_tk/uin）与请求指纹的模块。
 
-用法：
-    from util import SessionUtil
-    session = SessionUtil.get_session()   # 显式触发登录/读缓存，替代旧 import 副作用
-
+用法：`SessionUtil.get_session()` 显式触发登录/读缓存（替代旧 import 副作用）。
 其它文件不再自造 headers；改指纹只改这里。
 """
 import re
@@ -24,12 +21,20 @@ MOBILE_UA = (
 )
 
 
+def normalize_uin(raw_uin):
+    """cookie 里的 uin 带 `o` 前缀与补零（如 `o0123456789`），库文件名/结果目录一律用裸号；
+    登录态文件也按原始 uin 命名，拿文件名当 uin 用会指向另一个库，故凡「文件名→账号号段」
+    都走这里。示例号非真实。
+    """
+    return re.sub(r"o0*", "", raw_uin or "")
+
+
 class QzoneSession:
     def __init__(self, cookies=None, user_file=None, force_qr=False):
         if cookies is None:
             cookies = Login.cookie(user_file=user_file, force_qr=force_qr)
         self.cookies = cookies
-        self.uin = re.sub(r"o0*", "", cookies.get("uin"))
+        self.uin = normalize_uin(cookies.get("uin"))
         self.g_tk = Login.bkn(cookies.get("p_skey"))
         self.headers = self._build_headers()
         self.mobile_headers = self._build_mobile_headers()

@@ -1,0 +1,32 @@
+[project]
+name = "getqzone"
+version = "1.0.1"
+description = "QQ 空间互动消息/说说抓取与归档导出"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = [
+    "beautifulsoup4>=4.12",
+    "pandas>=2.0",
+    "tqdm>=4.60",
+    "requests>=2.31",
+    "Pillow>=10.0",
+    "openpyxl>=3.1",
+    "zxing-cpp~=3.1",
+    "qrcode~=8.2",
+]
+
+[project.scripts]
+getqzone = "main:main"
+
+[build-system]
+requires = ["uv_build>=0.7,<0.13", "setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# 根 main.py（console script 入口 main:main）+ util/ 包一起收进 wheel；
+# resource/（真实数据）/test/docs 绝不进包
+py-modules = ["main"]
+packages = ["util"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]

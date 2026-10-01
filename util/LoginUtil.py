@@ -13,7 +13,9 @@ import util.ConfigUtil as Config
 
 
 def bkn(pSkey):
-    # 计算bkn
+    # p_skey 缺失（离线路径只从 cookie 读 uin、登录态文件为空 dict）时不炸，g_tk 无效即可
+    if not pSkey:
+        return 0
     t, n, o = 5381, 0, len(pSkey)
 
     while n < o:
@@ -24,7 +26,6 @@ def bkn(pSkey):
 
 
 def ptqrToken(qrsig):
-    # 计算ptqrtoken
     n, i, e = len(qrsig), 0, 0
 
     while n > i:
@@ -35,56 +36,48 @@ def ptqrToken(qrsig):
 
 
 def QR():
-    # 获取 qq空间 二维码
     url = "https://ssl.ptlogin2.qq.com/ptqrshow?appid=549000912&e=2&l=M&s=3&d=72&v=4&t=0.8692955245720428&daid=5&pt_3rd_aid=0"
 
-    try:
-        r = requests.get(url)
-        qrsig = requests.utils.dict_from_cookiejar(r.cookies).get("qrsig")
+    r = requests.get(url)
+    qrsig = requests.utils.dict_from_cookiejar(r.cookies).get("qrsig")
 
-        with open(Config.temp_path + "QR.png", "wb") as f:
-            f.write(r.content)
+    qr_path = os.path.join(Config.temp_path, "QR.png")
+    with open(qr_path, "wb") as f:
+        f.write(r.content)
 
-        im = Image.open(Config.temp_path + "QR.png")
+    im = Image.open(qr_path)
 
-        print(time.strftime("%H:%M:%S"), "登录二维码获取成功")
+    print(time.strftime("%H:%M:%S"), "登录二维码获取成功")
 
-        result = zxingcpp.read_barcode(im)
-        if result is not None:
-            # EC=L + border=2：低纠错省一版（5→4），border=2 是屏幕扫码的最小可靠静区
-            # （border=1 时手机经常识别失败）；行高间隙是终端/聊天显示端的行距，
-            # print_ascii 产物本身无空行，无需处理
-            qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, border=2)
-            qr.add_data(result.text)
-            qr.print_ascii(invert=True)
-            # 终端 ASCII 之外同时用系统默认看图程序打开原图（手机对图片的识别率
-            # 远高于终端字符）。不做自动关闭：各平台窗口管理方式不一（osascript
-            # 还有自动化权限/超时问题），由用户扫完自己关。
-            if sys.platform == "darwin":
-                subprocess.Popen(["open", Config.temp_path + "QR.png"],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            elif sys.platform == "win32":
-                os.startfile(Config.temp_path + "QR.png")  # noqa: S606
-            else:
-                subprocess.Popen(["xdg-open", Config.temp_path + "QR.png"],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    result = zxingcpp.read_barcode(im)
+    if result is not None:
+        # EC=L + border=2：低纠错省一版（5→4），border=2 是屏幕扫码的最小可靠静区
+        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, border=2)
+        qr.add_data(result.text)
+        qr.print_ascii(invert=True)
+        # 终端 ASCII 之外同时用系统默认看图程序打开原图（手机对图片的识别率远高于
+        # 终端字符）。不做自动关闭：各平台窗口管理方式不一，由用户扫完自己关。
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", qr_path],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif sys.platform == "win32":
+            os.startfile(qr_path)  # noqa: S606
         else:
-            print(f"无法识别二维码，请扫描 {Config.temp_path}QR.png")
+            subprocess.Popen(["xdg-open", qr_path],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        print(f"无法识别二维码，请扫描 {qr_path}")
 
-        return qrsig
-
-    except Exception:
-        raise
+    return qrsig
 
 
 def cookie(user_file=None, force_qr=False):
     """取登录 cookie。user_file 指定登录态文件名（不提问）；force_qr 忽略已存登录态直接出码。"""
-    Config.init_flooder()
+    Config.ensure_dirs()
     if not force_qr:
-        select_user = Config.read_files_in_folder(user_file)
+        select_user = Config.select_saved_login(user_file)
         if select_user:
             return select_user
-    # 获取 QQ空间 cookie
     qrsig = QR()
     ptqrtoken = ptqrToken(qrsig)
 
@@ -100,21 +93,22 @@ def cookie(user_file=None, force_qr=False):
         cookies = {"qrsig": qrsig}
         try:
             r = requests.get(url, cookies=cookies)
-            if "二维码未失效" in r.text:
-                pass
-            elif "二维码认证中" in r.text:
+            # 响应头无 charset，长响应 requests 猜编码会错、中文关键词全部失配；该接口固定 UTF-8
+            text = r.content.decode("utf-8")
+            if "二维码未失效" in text:
+                pass  # 未失效：静默等待，循环底部 sleep 后继续轮询
+            elif "二维码认证中" in text:
                 print(time.strftime("%H:%M:%S"), "二维码认证中")
-            elif "二维码已失效" in r.text:
+            elif "二维码已失效" in text:
                 # 死码再轮询也不会成功，qrshow 换一张（qrsig 与 ptqrtoken 必须一起换）
                 print(time.strftime("%H:%M:%S"), "二维码已失效，重出")
                 qrsig = QR()
                 ptqrtoken = ptqrToken(qrsig)
-            elif "登录成功" in r.text:
+            elif "登录成功" in text:
                 print(time.strftime("%H:%M:%S"), "登录成功")
                 cookies = requests.utils.dict_from_cookiejar(r.cookies)
-                uin = requests.utils.dict_from_cookiejar(r.cookies).get("uin")
-                regex = re.compile(r"ptsigx=(.*?)&")
-                sigx = re.findall(regex, r.text)[0]
+                uin = cookies.get("uin")
+                sigx = re.search(r"ptsigx=(.*?)&", text).group(1)
                 url = (
                     "https://ptlogin2.qzone.qq.com/check_sig?pttype=1&uin="
                     + uin
@@ -128,18 +122,15 @@ def cookie(user_file=None, force_qr=False):
                 try:
                     r = requests.get(url, cookies=cookies, allow_redirects=False)
                     target_cookies = requests.utils.dict_from_cookiejar(r.cookies)
-                    p_skey = requests.utils.dict_from_cookiejar(r.cookies).get("p_skey")
                     Config.save_user(target_cookies)
-                    break
+                    return target_cookies
 
                 except Exception as e:
                     print(e)
             else:
-                print(time.strftime("%H:%M:%S"), "用户取消登录")
+                print(time.strftime("%H:%M:%S"), "未识别响应:", text[:120])
 
         except Exception as e:
             print(e)
 
         time.sleep(3)
-
-    return target_cookies
