@@ -48,17 +48,26 @@ Only content present in the feed / visible moments is available; posts visible o
 
 ## Usage
 
-Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/) (recommended) or pip.
+Three ways to run, pick by what you're comfortable with:
 
-```shell
-git clone git@github.com:ericbrownz/getqzone.git
-cd getqzone
+1. **Prebuilt release (no Python needed)** — grab `getqzone-<os>.tar.gz` from the [releases](https://github.com/ericbrownz/getqzone-pub/releases), unpack it, and run the `getqzone` inside the folder. Everything works from whatever directory you start it in; `resource/` is created there. On macOS the binary is ad-hoc signed, so if Gatekeeper refuses it, right-click → Open once, or `xattr -cr getqzone/`.
+2. **Install as a tool** (recommended if you have [uv](https://docs.astral.sh/uv/)):
 
-uv venv .
-uv pip install -r requirements.txt   # or: python -m venv .venv && pip install -r requirements.txt
+   ```shell
+   uv tool install getqzone-pub   # wheel from the release, or:
+   uv tool install /path/to/getqzone-1.0.1-py3-none-any.whl
+   getqzone --help
+   ```
 
-python main.py
-```
+3. **From source** — requires Python 3.10+ and uv (or pip):
+
+   ```shell
+   git clone git@github.com:ericbrownz/getqzone.git
+   cd getqzone
+   uv venv .
+   uv pip install -r requirements.txt
+   python main.py
+   ```
 
 Scan the QR code with your phone to log in; scraping and export run automatically. On later runs you can pick a saved login or enter `0` to re-scan. Pass `--user NAME` to skip that picker when stdin is not a TTY.
 
@@ -91,13 +100,14 @@ Everything has a working default — plain `python main.py` is a full run.
 Common runs:
 
 ```shell
-python main.py                    # normal run: resume, export, open the result folder
-python main.py --source both      # PC feed + get_feeds
-python main.py --max-batches 20   # short run to try it out; rerun to continue
-python main.py --deep             # feed first, then the deep-band backfill
+getqzone                           # normal run: resume, export, open the result folder
+getqzone --source both             # PC feed + get_feeds
+getqzone --max-batches 20          # short run to try it out; rerun to continue
+getqzone --deep                    # feed first, then the deep-band backfill
+# from source, the same invocations read: python main.py …
 ```
 
-State lives in `resource/store/<qq>.db` (moments, interactors, friends) plus checkpoints and `skips.jsonl` under `resource/temp/`. Exports are views over that store, so deleting the database is what starts a scrape over from scratch.
+State lives in `resource/store/<qq>.db` (moments, interactors, friends) plus checkpoints and `skips.jsonl` under `resource/temp/`. Exports are views over that store, so deleting the database is what starts a scrape over from scratch. All of those sit under `resource/` relative to the directory you run from; the store is portable — copy it with the folder you run from and the next run resumes where the last one left off.
 
 Design notes and probe scripts live in [docs/](docs/) and [test/](test/).
 

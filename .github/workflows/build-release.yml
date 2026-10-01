@@ -1,0 +1,72 @@
+name: build-release
+
+# 推 v* 标签时构建 wheel（uv）与 PyInstaller onedir 包，发到 GitHub Release。
+# 自用走 pipx/uv tool 装 wheel 即可；onedir 包给不想配 Python 的非技术用户
+# 双击解压即用——PyInstaller 不做交叉编译，故按 OS 各起一个 runner。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*
+
+  binary:
+    strategy:
+      matrix:
+        include:
+          - { os: macos-latest, name: macos }
+          - { os: windows-latest, name: windows }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --no-dev
+      # pyinstaller 要进 dev 依赖或跑时才装——直接临时装最省事
+      - run: uv pip install pyinstaller
+      # onedir（非 onefile）：onefile 启动慢且 PyInstaller 7.0 起将禁用对 .app 的
+      # onefile 打法；onedir 目录拷走就能跑。mac 侧 PyInstaller 自 ad-hoc 签名，
+      # 别人下载可能过不了 Gatekeeper，需 xattr -cr 或右键打开——写进 release 说明。
+      - shell: bash
+        run: >
+          uv run pyinstaller main.py --name getqzone --onedir --noconfirm
+          --collect-all getqzone --collect-all util
+          --hidden-import util
+          --exclude-module test --exclude-module docs
+      - shell: bash
+        run: |
+          cd dist
+          if [ -d getqzone ]; then
+            ${TAR:-tar} -caf "getqzone-${{ matrix.name }}.tar.gz" getqzone/
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.name }}
+          path: dist/getqzone*
+
+  release:
+    needs: [wheel, binary]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { pattern: "*", merge-multiple: true, path: rel }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            rel/*.whl
+            rel/*.tar.gz
+            rel/getqzone-*.tar.gz
